@@ -1,0 +1,308 @@
+*scrollflow.txt*   Newspaper-column layout for Neovim
+
+Author:   Ishan Tejram Varade <https://github.com/ishanvarade>
+License:  MIT
+Homepage: https://github.com/ishanvarade/scrollflow.nvim
+
+==============================================================================
+CONTENTS                                                  *scrollflow-contents*
+
+  1. Introduction .............. |scrollflow-introduction|
+  2. Requirements .............. |scrollflow-requirements|
+  3. Installation .............. |scrollflow-installation|
+  4. Quick start ............... |scrollflow-quickstart|
+  5. Configuration ............. |scrollflow-configuration|
+  6. Commands .................. |scrollflow-commands|
+  7. Cursor behaviour .......... |scrollflow-cursor|
+  8. How it works .............. |scrollflow-internals|
+  9. Changelog ................. |scrollflow-changelog|
+
+==============================================================================
+1. INTRODUCTION                                       *scrollflow-introduction*
+
+ScrollFlow splits one long file into two vertical panes that show the same
+buffer continuously — like the two columns of a newspaper page.
+
+    ┌──────────────────────┬──────────────────────┐
+    │   1 local M = {}     │  51 end              │
+    │   2                  │  52                  │
+    │   3 function M.setup │  53 function M.other │
+    │  ...                 │  ...                 │
+    │  50 end              │ 100 end              │
+    └──────────────────────┴──────────────────────┘
+              one buffer · one cursor · one document
+
+The plugin activates automatically when a file is taller than the window.
+Both panes always stay in sync: the right pane's top line equals the left
+pane's top line plus the window height, so the two panes together always
+show a seamless, continuous view of the file.
+
+Key properties:
+  - One buffer, two views — edits in either pane are instantly visible in both.
+  - `j` / `k` cross the pane boundary without any Ctrl-w switching.
+  - The page never scrolls unexpectedly — see |scrollflow-cursor|.
+  - Continuous relative numbers across both panes (Neovim ≥ 0.9).
+  - Automatically disables itself when you open a second file, enable diff
+    mode, or run |:ScrollFlowToggle|.
+
+==============================================================================
+2. REQUIREMENTS                                       *scrollflow-requirements*
+
+  - Neovim ≥ 0.8
+  - Neovim ≥ 0.9 for continuous relative numbers via `statuscolumn`
+
+==============================================================================
+3. INSTALLATION                                       *scrollflow-installation*
+
+lazy.nvim (recommended) ~
+>lua
+    {
+      'ishanvarade/scrollflow.nvim',
+      lazy = false,
+      config = function()
+        require('scrollflow').setup()
+      end,
+    }
+<
+
+packer.nvim ~
+>lua
+    use {
+      'ishanvarade/scrollflow.nvim',
+      config = function()
+        require('scrollflow').setup()
+      end,
+    }
+<
+
+vim-plug ~
+>vim
+    Plug 'ishanvarade/scrollflow.nvim'
+<
+Then add to your `init.lua`:
+>lua
+    require('scrollflow').setup()
+<
+
+Manual ~
+
+Clone the repository into your `runtimepath`:
+>bash
+    git clone https://github.com/ishanvarade/scrollflow.nvim \
+      ~/.local/share/nvim/site/pack/plugins/start/scrollflow.nvim
+<
+Then call `require('scrollflow').setup()` in your `init.lua`.
+
+==============================================================================
+4. QUICK START                                          *scrollflow-quickstart*
+
+1. Install the plugin (see |scrollflow-installation|).
+2. Add `require('scrollflow').setup()` to your `init.lua`.
+3. Open any file longer than your window height.
+4. ScrollFlow activates automatically — you will see two panes.
+5. Navigate with `j` / `k` as normal; the cursor crosses pane boundaries
+   seamlessly. See |scrollflow-cursor| for the full behaviour table.
+6. Use |:ScrollFlowToggle| to disable / re-enable at any time.
+
+==============================================================================
+5. CONFIGURATION                                     *scrollflow-configuration*
+
+Pass a table to `setup()` to override defaults. All keys are optional.
+>lua
+    require('scrollflow').setup({
+      -- Master switch. Set to false to disable the plugin entirely.
+      -- Default: true
+      enabled = true,
+
+      -- Show continuous relative numbers across both panes.
+      -- Uses 'statuscolumn'; requires Neovim >= 0.9.
+      -- Default: true
+      fake_numbers = true,
+
+      -- Width of the number column (characters).
+      -- Default: 4
+      number_width = 4,
+
+      -- Filetypes where ScrollFlow will NOT activate.
+      -- Default: see below
+      exclude_filetypes = {
+        'help', 'qf', 'NvimTree', 'neo-tree', 'TelescopePrompt',
+        'lazy', 'mason', 'noice', 'notify',
+      },
+
+      -- Buffer types where ScrollFlow will NOT activate.
+      -- Default: see below
+      exclude_buftypes = {
+        'terminal', 'prompt', 'nofile', 'quickfix', 'help',
+      },
+    })
+<
+
+                                                        *scrollflow.enabled*
+`enabled` (boolean, default: `true`)
+    Master switch. When `false` the plugin never activates, even on
+    `BufWinEnter`. You can toggle the current session with |:ScrollFlowToggle|
+    without changing this permanent setting.
+
+                                                     *scrollflow.fake_numbers*
+`fake_numbers` (boolean, default: `true`)
+    When `true`, ScrollFlow replaces Neovim's built-in `number` /
+    `relativenumber` columns with a custom `statuscolumn` expression that
+    shows relative line numbers calculated from a single global cursor
+    position across both panes. Requires Neovim ≥ 0.9. On older versions
+    this option is silently ignored and numbers are hidden.
+
+                                                     *scrollflow.number_width*
+`number_width` (number, default: `4`)
+    Width in characters of the custom number column. Increase if you work
+    with files longer than 9999 lines.
+
+                                              *scrollflow.exclude_filetypes*
+`exclude_filetypes` (list of strings)
+    ScrollFlow will not activate when the buffer's `filetype` matches any
+    entry in this list.
+
+                                               *scrollflow.exclude_buftypes*
+`exclude_buftypes` (list of strings)
+    ScrollFlow will not activate when the buffer's `buftype` matches any
+    entry. Only normal buffers (`buftype = ""`) can host the split.
+
+==============================================================================
+6. COMMANDS                                             *scrollflow-commands*
+
+                                                        *:ScrollFlowToggle*
+:ScrollFlowToggle
+    Toggle ScrollFlow for the current session.
+    - If active: closes the right pane and restores the single-window layout.
+    - If inactive: re-activates on the current buffer (if eligible).
+
+    The toggle state is not persisted across Neovim restarts; the plugin
+    will activate normally on the next startup unless `enabled = false` is
+    set in |scrollflow-configuration|.
+
+==============================================================================
+7. CURSOR BEHAVIOUR                                        *scrollflow-cursor*
+
+ScrollFlow fully owns `j` and `k` while active. The original bindings are
+saved and restored when the plugin deactivates.
+
+The golden rule: **the page never scrolls when you press `j` or `k`**, except
+at the two natural document edges.
+
+------------------------------------------------------------------------------
+
+`j` in the LEFT pane ~
+
+  Cursor NOT at bottom of left pane:
+      Cursor moves down one line. Page stays still.
+
+  Cursor AT bottom of left pane:
+      Cursor disappears from the left pane and reappears at the TOP of the
+      right pane. Page stays still. (Pane crossing →)
+
+`j` in the RIGHT pane ~
+
+  Cursor NOT at bottom of right pane:
+      Cursor moves down one line. Page stays still.
+
+  Cursor AT bottom of right pane:
+      Page scrolls UP by one line (both panes shift so you see the next line
+      below). Cursor stays at the bottom of the right pane.
+
+------------------------------------------------------------------------------
+
+`k` in the RIGHT pane ~
+
+  Cursor NOT at top of right pane:
+      Cursor moves up one line. Page stays still.
+
+  Cursor AT top of right pane:
+      Cursor disappears from the right pane and reappears at the BOTTOM of
+      the left pane. Page stays still. (Pane crossing ←)
+
+`k` in the LEFT pane ~
+
+  Cursor NOT at top of left pane:
+      Cursor moves up one line. Page stays still.
+
+  Cursor AT top of left pane:
+      Page scrolls DOWN by one line (both panes shift so you see the previous
+      line above). Cursor stays at the top of the left pane.
+
+------------------------------------------------------------------------------
+
+Summary table ~
+
+  Location            Key   Cursor              Page
+  ──────────────────  ────  ──────────────────  ────────────────────
+  Left, mid-pane      j     Down one line       Stays still
+  Left, at bottom     j     → Top of right      Stays still
+  Right, mid-pane     j     Down one line       Stays still
+  Right, at bottom    j     Stays at bottom     Scrolls UP one line
+  Right, mid-pane     k     Up one line         Stays still
+  Right, at top       k     → Bottom of left    Stays still
+  Left, mid-pane      k     Up one line         Stays still
+  Left, at top        k     Stays at top        Scrolls DOWN one line
+
+==============================================================================
+8. HOW IT WORKS                                         *scrollflow-internals*
+
+Overflow detection ~
+    On `BufWinEnter`, `VimResized`, and `WinResized`, ScrollFlow checks
+    whether the buffer has more lines than the window height. If so, and if
+    no multi-window layout is already open, it runs `:vsplit` on the current
+    window. The new (right) window shows the same buffer with its topline set
+    to `left_topline + left_height`.
+
+Scroll lock ~
+    A `WinScrolled` autocmd fires whenever either pane scrolls. The handler
+    recomputes the expected toplines and calls `winrestview()` on the other
+    pane to keep the invariant `right_topline = left_topline + left_height`.
+    A "last-known" table breaks the feedback loop that would otherwise cause
+    the two `winrestview()` calls to ping-pong indefinitely.
+
+Cursor control ~
+    `j` and `k` are remapped globally (original mappings saved; restored on
+    deactivation). The handlers use `nvim_win_set_cursor()` combined with
+    `winrestview({ topline = … })` to move the cursor without ever letting
+    Neovim's built-in scroll-on-edge behaviour trigger. The two edge cases
+    (bottom of right pane / top of left pane) call an explicit `scroll_both()`
+    helper that adjusts both panes' toplines by ±1. `scrolloff` is set to 0
+    on both ScrollFlow windows so the cursor can physically reach the last and
+    first visible lines; the original value is restored on deactivation.
+
+Fake relative numbers ~
+    When `fake_numbers = true`, the `statuscolumn` option on both windows is
+    set to a Lua expression. The expression reads a module-level
+    `_cursor_line` variable updated by a `CursorMoved` autocmd, then returns
+    `abs(v:lnum - cursor_line)` for relative lines and `v:lnum` for the
+    cursor line itself. Because both windows share the same expression and
+    the same variable, the numbers are continuous across both panes.
+
+Visual selection mirror ~
+    In visual mode, a `CursorMoved` autocmd computes the selected line range
+    and calls `nvim_buf_add_highlight()` in a private namespace on any lines
+    of the selection that are visible in the non-active pane. The highlights
+    are cleared when the mode changes back to normal.
+
+Smart deactivation ~
+    ScrollFlow deactivates automatically when:
+      - A second normal buffer is opened in a new window (`BufWinEnter`).
+      - Diff mode is enabled (`OptionSet diff`).
+      - The right pane is closed externally (`WinClosed`).
+      - |:ScrollFlowToggle| is called by the user.
+
+==============================================================================
+9. CHANGELOG                                           *scrollflow-changelog*
+
+v0.1.0 (2025) ~
+    - Initial release.
+    - Auto-split on overflow.
+    - Seamless j/k cursor crossing with correct scroll semantics.
+    - Scroll sync (right_topline = left_topline + height).
+    - Continuous relative numbers via statuscolumn (Neovim ≥ 0.9).
+    - Visual selection mirror across panes.
+    - Smart deactivation (diff mode, multi-window, :ScrollFlowToggle).
+
+==============================================================================
+vim:tw=78:ts=8:ft=help:norl:

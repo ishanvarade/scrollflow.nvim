@@ -1,0 +1,17 @@
+:ScrollFlowToggle	scrollflow.txt	/*:ScrollFlowToggle*
+scrollflow-changelog	scrollflow.txt	/*scrollflow-changelog*
+scrollflow-commands	scrollflow.txt	/*scrollflow-commands*
+scrollflow-configuration	scrollflow.txt	/*scrollflow-configuration*
+scrollflow-contents	scrollflow.txt	/*scrollflow-contents*
+scrollflow-cursor	scrollflow.txt	/*scrollflow-cursor*
+scrollflow-installation	scrollflow.txt	/*scrollflow-installation*
+scrollflow-internals	scrollflow.txt	/*scrollflow-internals*
+scrollflow-introduction	scrollflow.txt	/*scrollflow-introduction*
+scrollflow-quickstart	scrollflow.txt	/*scrollflow-quickstart*
+scrollflow-requirements	scrollflow.txt	/*scrollflow-requirements*
+scrollflow.enabled	scrollflow.txt	/*scrollflow.enabled*
+scrollflow.exclude_buftypes	scrollflow.txt	/*scrollflow.exclude_buftypes*
+scrollflow.exclude_filetypes	scrollflow.txt	/*scrollflow.exclude_filetypes*
+scrollflow.fake_numbers	scrollflow.txt	/*scrollflow.fake_numbers*
+scrollflow.number_width	scrollflow.txt	/*scrollflow.number_width*
+scrollflow.txt	scrollflow.txt	/*scrollflow.txt*
