@@ -1,0 +1,13 @@
+# Neovim swap / undo files
+*.swp
+*.swo
+*.swn
+.*.swp
+
+# Luarocks / build artefacts
+*.rock
+luarocks/
+
+# OS
+.DS_Store
+Thumbs.db
