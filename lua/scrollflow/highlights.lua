@@ -31,8 +31,7 @@ local function update_visual_mirror()
 
   local mode = vim.fn.mode()
   if mode ~= 'v' and mode ~= 'V' and mode ~= '\22' then
-    clear_mirror(state.buf)
-    return
+    return  -- not in visual; ModeChanged handles clearing when we exit visual
   end
 
   local cur_win = vim.api.nvim_get_current_win()
@@ -92,25 +91,39 @@ end
 
 -- Called from sync.lua after a scroll event.
 function M.on_scroll()
-  -- Search highlights auto-refresh. Visual mirror may need a repaint.
   update_visual_mirror()
 end
 
 function M.setup()
   local group = vim.api.nvim_create_augroup('ScrollFlowHighlights', { clear = true })
 
+  -- BUG-J fix: only update mirror when actually in visual mode.
+  -- Previously clear_mirror() was called on every cursor move even when not
+  -- in visual mode, which was wasteful. ModeChanged handles the clear-on-exit.
   vim.api.nvim_create_autocmd({ 'CursorMoved', 'CursorMovedI' }, {
     group    = group,
-    callback = update_visual_mirror,
+    callback = function()
+      local mode = vim.fn.mode()
+      if mode == 'v' or mode == 'V' or mode == '\22' then
+        update_visual_mirror()
+      end
+    end,
   })
 
+  -- Clear mirror when leaving visual mode
   vim.api.nvim_create_autocmd('ModeChanged', {
     group    = group,
     callback = function()
       local new = vim.v.event.new_mode
       if new ~= 'v' and new ~= 'V' and new ~= '\22' then
         local state = require('scrollflow.split').state
-        if state.active then clear_mirror(state.buf) end
+        -- BUG-B fix: state.buf is still valid here (event fires before state clear)
+        if state.buf and vim.api.nvim_buf_is_valid(state.buf) then
+          clear_mirror(state.buf)
+        elseif not state.active then
+          -- deactivated while in visual mode; clear from the last known buf
+          -- nothing we can do if buf is already nil
+        end
       end
     end,
   })
@@ -119,10 +132,21 @@ function M.setup()
     pattern  = 'ScrollFlowDeactivated',
     group    = group,
     callback = function()
-      -- buf may already be nil; clear is a no-op if buf is invalid
+      -- BUG-B fix: state.buf is still populated here now (event fires before clear)
       local state = require('scrollflow.split').state
       if state.buf and vim.api.nvim_buf_is_valid(state.buf) then
         clear_mirror(state.buf)
+      end
+    end,
+  })
+
+  -- BUG-O: clear extmarks when the buffer itself is deleted
+  vim.api.nvim_create_autocmd('BufDelete', {
+    group    = group,
+    callback = function(ev)
+      local buf = ev.buf
+      if vim.api.nvim_buf_is_valid(buf) then
+        vim.api.nvim_buf_clear_namespace(buf, NS, 0, -1)
       end
     end,
   })

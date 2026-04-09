@@ -17,13 +17,15 @@ local has_statuscolumn = vim.fn.has('nvim-0.9') == 1
 
 -- ---------------------------------------------------------------------------
 -- Statuscolumn expression – called by Neovim once per visible line per window
+-- BUG-M fix: use a namespaced global table instead of a flat global name
 -- ---------------------------------------------------------------------------
 
--- Exposed on _G so the %{v:lua...} expression can reach it cheaply.
-_G._ScrollFlowStatuscolumn = function(lnum)
+-- The statuscolumn expression function. Stored in a module-level variable so
+-- it can be re-assigned to _G.__ScrollFlow on every activation (BUG-I fix:
+-- deactivate nils the global; activate must recreate it).
+local function sc(lnum)
   local state = require('scrollflow.split').state
   if not state.active then
-    -- Inactive: show plain absolute number right-aligned
     local w = require('scrollflow.config').options.number_width
     return string.format('%' .. w .. 'd ', lnum)
   end
@@ -33,29 +35,29 @@ _G._ScrollFlowStatuscolumn = function(lnum)
   local rel    = lnum - cursor
 
   if rel == 0 then
-    -- Current line: bold absolute number (just the number, highlight handles bold)
     return string.format('%' .. w .. 'd ', lnum)
   else
     return string.format('%' .. w .. 'd ', math.abs(rel))
   end
 end
 
+-- Register the global initially (and re-register on each activation).
+_G.__ScrollFlow = _G.__ScrollFlow or {}
+_G.__ScrollFlow.sc = sc
+
+-- BUG-M fix: updated expression to use namespaced global
+local SC_EXPR = "%{v:lua.__ScrollFlow.sc(v:lnum)}"
+
 -- ---------------------------------------------------------------------------
 -- Apply / remove statuscolumn on a window
 -- ---------------------------------------------------------------------------
 
-local SC_EXPR = "%{v:lua._ScrollFlowStatuscolumn(v:lnum)}"
-
 local function apply_statuscolumn(win)
   if not has_statuscolumn then return end
+  -- BUG-C fix: respect fake_numbers = false config option
+  if not require('scrollflow.config').options.fake_numbers then return end
   if not vim.api.nvim_win_is_valid(win) then return end
   vim.wo[win].statuscolumn = SC_EXPR
-end
-
-local function clear_statuscolumn(win)
-  if not has_statuscolumn then return end
-  if not vim.api.nvim_win_is_valid(win) then return end
-  vim.wo[win].statuscolumn = ''
 end
 
 -- ---------------------------------------------------------------------------
@@ -75,12 +77,7 @@ end
 function M.refresh()
   local state = require('scrollflow.split').state
   if not state.active then return end
-  if has_statuscolumn then
-    -- Neovim will redraw automatically; calling redraw here causes flicker.
-    -- Just update the cursor line tracker (already done via CursorMoved).
-    return
-  end
-  -- Fallback: nothing to do
+  -- statuscolumn redraws automatically; nothing extra needed
 end
 
 function M.setup()
@@ -92,6 +89,9 @@ function M.setup()
     callback = function()
       local state = require('scrollflow.split').state
       if not state.active then return end
+      -- Re-register global (may have been cleared by previous deactivate)
+      _G.__ScrollFlow = _G.__ScrollFlow or {}
+      _G.__ScrollFlow.sc = sc
       -- Seed cursor line
       local ok, cur = pcall(vim.api.nvim_win_get_cursor, state.left_win)
       if ok then M._cursor_line = cur[1] end
@@ -104,7 +104,11 @@ function M.setup()
     pattern  = 'ScrollFlowDeactivated',
     group    = group,
     callback = function()
-      -- split.lua already cleared statuscolumn on left_win before closing right_win
+      -- BUG-I fix: remove the global so it doesn't leak between sessions
+      -- BUG-B fix: state still has left_win/right_win here (event fires before state clear)
+      -- split.lua restores statuscolumn on left_win; right_win is being closed.
+      -- Just clean up the global.
+      _G.__ScrollFlow = nil
     end,
   })
 

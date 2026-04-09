@@ -6,12 +6,19 @@ local M = {}
 
 -- Shared state for all modules
 M.state = {
-  active       = false,
-  left_win     = nil,
-  right_win    = nil,
-  buf          = nil,
-  -- Set to true when the user explicitly disables via :ScrollFlowToggle
+  active        = false,
+  left_win      = nil,
+  right_win     = nil,
+  buf           = nil,
+  tabpage       = nil,   -- BUG-L: which tabpage ScrollFlow is active on
   user_disabled = false,
+
+  -- Saved window options (restored on deactivate)
+  saved_scrolloff_left      = nil,
+  saved_scrolloff_right     = nil,
+  saved_number_left         = nil,  -- BUG-A
+  saved_relativenumber_left = nil,  -- BUG-A
+  saved_statuscolumn_left   = nil,  -- BUG-E
 }
 
 -- ---------------------------------------------------------------------------
@@ -21,13 +28,20 @@ M.state = {
 local function buf_is_eligible(buf)
   if not vim.api.nvim_buf_is_valid(buf) then return false end
 
-  local bt = vim.bo[buf].buftype
-  if bt ~= '' then return false end   -- only normal buffers
-
-  local ft  = vim.bo[buf].filetype
   local cfg = require('scrollflow.config').options
-  for _, excluded in ipairs(cfg.exclude_filetypes) do
-    if ft == excluded then return false end
+  local bt  = vim.bo[buf].buftype
+  local ft  = vim.bo[buf].filetype
+
+  -- BUG-D fix: actually check exclude_buftypes (was never consulted before)
+  for _, excl in ipairs(cfg.exclude_buftypes) do
+    if bt == excl then return false end
+  end
+
+  -- Only normal (empty buftype) buffers
+  if bt ~= '' then return false end
+
+  for _, excl in ipairs(cfg.exclude_filetypes) do
+    if ft == excl then return false end
   end
 
   return true
@@ -84,28 +98,31 @@ function M.activate(win, buf)
   vim.wo[win].winfixwidth       = true
   vim.wo[right_win].winfixwidth = true
 
-  -- Turn off built-in numbers on both (fake numbers module takes over)
-  vim.wo[win].number            = false
-  vim.wo[win].relativenumber    = false
-  vim.wo[right_win].number      = false
+  -- BUG-A fix: save number/relativenumber before turning them off
+  M.state.saved_number_left         = vim.wo[win].number
+  M.state.saved_relativenumber_left = vim.wo[win].relativenumber
+
+  -- Turn off built-in numbers on both (fake numbers module takes over if enabled)
+  vim.wo[win].number               = false
+  vim.wo[win].relativenumber       = false
+  vim.wo[right_win].number         = false
   vim.wo[right_win].relativenumber = false
 
+  -- BUG-E fix: save original statuscolumn before numbers.lua overwrites it
+  M.state.saved_statuscolumn_left = vim.wo[win].statuscolumn
+
   -- Override scrolloff to 0 on both panes so the cursor can physically reach
-  -- the last/first visible line. Without this, scrolloff (e.g. 8) creates a
-  -- dead zone: cursor stops N lines from the edge, the view scrolls, and
-  -- crossing never fires at the real pane boundary.
-  -- We save the current window-local value (-1 means "inherit global") and
-  -- restore it on deactivation.
+  -- the last/first visible line without triggering unwanted page scrolls.
   M.state.saved_scrolloff_left  = vim.wo[win].scrolloff
   M.state.saved_scrolloff_right = vim.wo[right_win].scrolloff
   vim.wo[win].scrolloff       = 0
   vim.wo[right_win].scrolloff = 0
 
   -- Scroll right window to show the continuation of left window
-  local height     = vim.api.nvim_win_get_height(win)
-  local topline    = vim.fn.line('w0', win)
-  local right_top  = math.max(1, math.min(topline + height,
-                               vim.api.nvim_buf_line_count(buf)))
+  local height    = vim.api.nvim_win_get_height(win)
+  local topline   = vim.fn.line('w0', win)
+  local right_top = math.max(1, math.min(topline + height,
+                              vim.api.nvim_buf_line_count(buf)))
 
   vim.api.nvim_win_call(right_win, function()
     vim.fn.winrestview({ topline = right_top, lnum = right_top })
@@ -118,37 +135,62 @@ function M.activate(win, buf)
   M.state.left_win  = win
   M.state.right_win = right_win
   M.state.buf       = buf
+  M.state.tabpage   = vim.api.nvim_get_current_tabpage()  -- BUG-L
 
   vim.api.nvim_exec_autocmds('User', { pattern = 'ScrollFlowActivated' })
 end
 
 -- ---------------------------------------------------------------------------
 -- Public: close the paired split and reset state
+-- opts.skip_close: set true when right_win is already being closed externally
 -- ---------------------------------------------------------------------------
 
-function M.deactivate()
+function M.deactivate(opts)
   if not M.state.active then return end
+  opts = opts or {}
 
-  -- Restore window options before we possibly close the window
+  -- BUG-B fix: mark inactive FIRST (prevents re-entry), but keep win/buf
+  -- populated so that ScrollFlowDeactivated handlers can still read them.
+  M.state.active = false
+
+  -- Fire event while left_win / right_win / buf are still valid
+  vim.api.nvim_exec_autocmds('User', { pattern = 'ScrollFlowDeactivated' })
+
+  -- Restore all saved window options on left pane
   if M.state.left_win and vim.api.nvim_win_is_valid(M.state.left_win) then
-    vim.wo[M.state.left_win].winfixwidth    = false
-    vim.wo[M.state.left_win].statuscolumn   = ''
-    -- Restore scrolloff: -1 means "inherit from global option"
-    vim.wo[M.state.left_win].scrolloff =
+    local lw = M.state.left_win
+    vim.wo[lw].winfixwidth    = false
+    -- BUG-A fix: restore number / relativenumber
+    if M.state.saved_number_left ~= nil then
+      vim.wo[lw].number = M.state.saved_number_left
+    end
+    if M.state.saved_relativenumber_left ~= nil then
+      vim.wo[lw].relativenumber = M.state.saved_relativenumber_left
+    end
+    -- BUG-E fix: restore original statuscolumn instead of blanking it
+    vim.wo[lw].statuscolumn = M.state.saved_statuscolumn_left or ''
+    -- Restore scrolloff (-1 = inherit from global option)
+    vim.wo[lw].scrolloff =
       M.state.saved_scrolloff_left ~= nil and M.state.saved_scrolloff_left or -1
   end
 
-  if M.state.right_win and vim.api.nvim_win_is_valid(M.state.right_win) then
-    -- Closing right_win – no need to restore its options
-    vim.api.nvim_win_close(M.state.right_win, false)
+  -- Close the right pane (unless it is already being closed)
+  if not opts.skip_close then
+    if M.state.right_win and vim.api.nvim_win_is_valid(M.state.right_win) then
+      vim.api.nvim_win_close(M.state.right_win, false)
+    end
   end
 
-  M.state.active    = false
-  M.state.left_win  = nil
-  M.state.right_win = nil
-  M.state.buf       = nil
-
-  vim.api.nvim_exec_autocmds('User', { pattern = 'ScrollFlowDeactivated' })
+  -- Clear state
+  M.state.left_win                  = nil
+  M.state.right_win                 = nil
+  M.state.buf                       = nil
+  M.state.tabpage                   = nil
+  M.state.saved_number_left         = nil
+  M.state.saved_relativenumber_left = nil
+  M.state.saved_statuscolumn_left   = nil
+  M.state.saved_scrolloff_left      = nil
+  M.state.saved_scrolloff_right     = nil
 end
 
 -- ---------------------------------------------------------------------------
