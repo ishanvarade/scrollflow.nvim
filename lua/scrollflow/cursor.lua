@@ -44,13 +44,16 @@ local function feedkeys(key)
 end
 
 -- Move cursor to (line, col) in a window without scrolling the view.
+-- BUG-P fix: perform cursor set and view restore inside one nvim_win_call so
+-- that any scrolloff-triggered intermediate scroll is overwritten by
+-- winrestview before Neovim flushes WinScrolled events.
 local function set_cursor_no_scroll(win, line, col)
-  local view = vim.api.nvim_win_call(win, function() return vim.fn.winsaveview() end)
   local text = vim.api.nvim_buf_get_lines(
     vim.api.nvim_win_get_buf(win), line - 1, line, false)[1] or ''
   local safe_col = math.max(0, math.min(col, math.max(0, #text - 1)))
-  vim.api.nvim_win_set_cursor(win, { line, safe_col })
   vim.api.nvim_win_call(win, function()
+    local view = vim.fn.winsaveview()
+    vim.api.nvim_win_set_cursor(0, { line, safe_col })
     vim.fn.winrestview({ topline = view.topline, leftcol = view.leftcol })
   end)
 end
@@ -76,11 +79,31 @@ local function scroll_both(state, delta)
 
   sync.set_expected(new_lw_top, new_rw_top)
 
+  -- For each pane: set topline and clamp the cursor into the new visible
+  -- range so Neovim does not reset the topline to keep an out-of-view cursor
+  -- visible. The NON-active pane gets its cursor pinned to its new topline —
+  -- the active pane cursor is repositioned by the caller via place_cursor_in_pane().
+  local active_win = vim.api.nvim_get_current_win()
+
   vim.api.nvim_win_call(state.left_win, function()
-    vim.fn.winrestview({ topline = new_lw_top })
+    if state.left_win == active_win then
+      -- Active pane: clamp cursor to new visible range, but keep it in place if possible
+      local cur = vim.api.nvim_win_get_cursor(0)[1]
+      local lnum = math.max(new_lw_top, math.min(cur, new_lw_top + lw_height - 1))
+      vim.fn.winrestview({ topline = new_lw_top, lnum = lnum })
+    else
+      -- Inactive pane: pin cursor to topline to avoid Neovim adjusting topline
+      vim.fn.winrestview({ topline = new_lw_top, lnum = new_lw_top })
+    end
   end)
   vim.api.nvim_win_call(state.right_win, function()
-    vim.fn.winrestview({ topline = new_rw_top })
+    if state.right_win == active_win then
+      local cur = vim.api.nvim_win_get_cursor(0)[1]
+      local lnum = math.max(new_rw_top, math.min(cur, new_rw_top + rw_height - 1))
+      vim.fn.winrestview({ topline = new_rw_top, lnum = lnum })
+    else
+      vim.fn.winrestview({ topline = new_rw_top, lnum = new_rw_top })
+    end
   end)
   return true
 end
@@ -207,6 +230,16 @@ local function scroll_precheck(key)
   return state, win, cur[1], cur[2]
 end
 
+-- Re-anchor expected toplines after cursor placement (BUG-P safety net).
+-- place_cursor_in_pane may trigger intermediate WinScrolled events (e.g. due
+-- to 'scrolloff') that shift the views before the sync handler can see the
+-- final state.  Calling this afterwards resets _expected to the actual current
+-- toplines so subsequent deferred WinScrolled events are treated as no-ops.
+local function reanchor(state)
+  require('scrollflow.sync').set_expected(
+    win_top(state.left_win), win_top(state.right_win))
+end
+
 -- <C-d>: scroll down half page, cursor follows
 local function handle_ctrl_d()
   local state, win, cur_line, cur_col = scroll_precheck('<C-d>')
@@ -218,6 +251,7 @@ local function handle_ctrl_d()
   else
     place_cursor_in_pane(state, win_bottom(state.right_win), cur_col)
   end
+  reanchor(state)
 end
 
 -- <C-u>: scroll up half page, cursor follows
@@ -230,6 +264,7 @@ local function handle_ctrl_u()
   else
     place_cursor_in_pane(state, win_top(state.left_win), cur_col)
   end
+  reanchor(state)
 end
 
 -- <C-f>: scroll down full page, cursor to top of new view
@@ -242,6 +277,7 @@ local function handle_ctrl_f()
   else
     place_cursor_in_pane(state, win_bottom(state.right_win), cur_col)
   end
+  reanchor(state)
 end
 
 -- <C-b>: scroll up full page, cursor to bottom of new view
@@ -254,6 +290,7 @@ local function handle_ctrl_b()
   else
     place_cursor_in_pane(state, win_top(state.left_win), cur_col)
   end
+  reanchor(state)
 end
 
 -- <C-e>: scroll down 1 line, cursor stays (clamps to new top if scrolled off)
